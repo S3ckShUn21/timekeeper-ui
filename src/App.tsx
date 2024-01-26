@@ -30,7 +30,7 @@ interface DateInfo {
 const HOURS_COLOR = '#a7f3d0';
 const MILES_COLOR = '#e9d5ff';
 
-const API_ROOT = "http://localhost:3030/";
+const API_ROOT = import.meta.env.VITE_API_ROOT;
 
 const TZ_OFFSET_SEC = new Date().getTimezoneOffset() * 60;
 
