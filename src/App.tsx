@@ -3,8 +3,7 @@ import { Calendar } from '@/components/ui/calendar'
 import { Input } from '@/components/ui/input';
 import { Label } from '@radix-ui/react-label';
 import { add, fromUnixTime, getUnixTime, lastDayOfMonth, startOfMonth, startOfToday, sub } from 'date-fns';
-import { useCallback, useEffect, useState } from 'react';
-import { flushSync } from 'react-dom';
+import { useEffect, useState } from 'react';
 
 /*
  * Note for future Cole about handling timezone conversions...
@@ -28,29 +27,64 @@ interface DateInfo {
   miles: number,
 }
 
-const hoursColor = '#a7f3d0';
-const milesColor = '#e9d5ff';
+const HOURS_COLOR = '#a7f3d0';
+const MILES_COLOR = '#e9d5ff';
+
+const API_ROOT = "http://localhost:3030/";
+
+const TZ_OFFSET_SEC = new Date().getTimezoneOffset() * 60;
+
+function locToUtcUnix(localDate: Date): number {
+  return getUnixTime(localDate)-TZ_OFFSET_SEC;
+}
+
 
 // NOTE: the 'both' class must be kept below the other classes to pull priority over the previous classes when rendering
 const datesCss = `
   .hours {
-    background-image: linear-gradient(to top left, transparent 50%, ${hoursColor} 0);
+    background-image: linear-gradient(to top left, transparent 50%, ${HOURS_COLOR} 0);
   }
 
   .miles {
-    background-image: linear-gradient(to bottom right, transparent 50%, ${milesColor} 0);
+    background-image: linear-gradient(to bottom right, transparent 50%, ${MILES_COLOR} 0);
   }
 
   .both {
-    background-image: linear-gradient(to bottom right, transparent 50%, ${milesColor} 0),
-                      linear-gradient(to top left, transparent 50%, ${hoursColor} 0);
+    background-image: linear-gradient(to bottom right, transparent 50%, ${MILES_COLOR} 0),
+                      linear-gradient(to top left, transparent 50%, ${HOURS_COLOR} 0);
   }
 
 `
 
+// TODO: Handle the errors
+async function apiFetchDateInfo(utcUnixFrom: number, utcUnixTo: number): Promise<DateInfo[]> {
+  const res = await fetch(`${API_ROOT}?from=${utcUnixFrom}&to=${utcUnixTo}`);
+  return await res.json();
+}
+
+async function apiDeleteDateInfo(utcUnixDate: number) {
+  await fetch(
+    `${API_ROOT}?date=${utcUnixDate}`,
+    {
+      method: 'DELETE'
+    }
+  );
+}
+
+async function apiSetDateInfo(info: DateInfo) {
+  await fetch(
+    `${API_ROOT}`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(info)
+    }
+  )
+}
 
 function App() {
-  const tzOffsetSec = new Date().getTimezoneOffset() * 60;
 
   const [datesStart, setDatesStart] = useState(startOfMonth(sub(new Date(), {months: 1})));
   const [datesEnd, setDatesEnd] = useState(lastDayOfMonth(new Date()));
@@ -60,12 +94,13 @@ function App() {
   const [miles, setMiles] = useState('');
 
   // Computed dates lists for the calendar styling
-  const bothDates = dateInfoUtc.filter(d => d.hours > 0 && d.miles > 0).map(d => fromUnixTime(d.date + tzOffsetSec));
-  const hoursDates = dateInfoUtc.filter(d => d.hours > 0).map(d => fromUnixTime(d.date + tzOffsetSec)); 
-  const milesDates = dateInfoUtc.filter(d => d.miles > 0).map(d => fromUnixTime(d.date + tzOffsetSec)); 
-  // Computed vars for the selected date
-  const selectedDateUtcUnix = selectedDate ? getUnixTime(selectedDate)-tzOffsetSec : undefined;
-  const selectedInfo = dateInfoUtc.find(d => selectedDateUtcUnix && d.date === selectedDateUtcUnix);
+  const bothDates = dateInfoUtc.filter(d => d.hours > 0 && d.miles > 0).map(d => fromUnixTime(d.date + TZ_OFFSET_SEC));
+  const hoursDates = dateInfoUtc.filter(d => d.hours > 0).map(d => fromUnixTime(d.date + TZ_OFFSET_SEC)); 
+  const milesDates = dateInfoUtc.filter(d => d.miles > 0).map(d => fromUnixTime(d.date + TZ_OFFSET_SEC)); 
+  // Computed var for the selected date
+  const selectedInfo = dateInfoUtc.find(
+    d => selectedDate && d.date === locToUtcUnix(selectedDate)
+  );
 
   // Update the form at the bottom of the page when the selected date changes
   useEffect(() => {
@@ -79,24 +114,14 @@ function App() {
   }, [selectedInfo])
   
 
-  // This function gets all the date info for the months currently shown on screen
-  const fetchDateInfo = useCallback(async () => {
-    const resp = await fetch(
-      `http://localhost:3030?from=${
-        getUnixTime(datesStart)-tzOffsetSec
-      }&to=${
-        getUnixTime(datesEnd)-tzOffsetSec
-      }`
-    );
-    const di = await resp.json();
-    // console.log(di);
-    setDateInfoUtc(di);
-  }, [datesStart, datesEnd]);
-
-
   // Load the DateInfo for the shown months on first render
   useEffect(() => {
-    fetchDateInfo();
+    apiFetchDateInfo(
+      locToUtcUnix(datesStart),
+      locToUtcUnix(datesEnd)
+    ).then(dateInfos => {
+      setDateInfoUtc(dateInfos); 
+    })
   }, [])
 
 
@@ -106,38 +131,31 @@ function App() {
 
     // If they are both set to 0 then delete the day from the DB
     if (hFloat === 0 && mFloat === 0) {
-      await fetch(`http://localhost:3030?date=${selectedDateUtcUnix}`, {
-        method: 'DELETE'
-      });
+      await apiDeleteDateInfo(locToUtcUnix(selectedDate as Date));
     }
     // ELSE - modify the day
     else {
-      await fetch(
-        'http://localhost:3030/',
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'          
-          },
-          body: JSON.stringify({
-            date: selectedDateUtcUnix,
-            hours: parseFloat(hours),
-            miles: parseFloat(miles),
-          })
-        }
-      );
+      await apiSetDateInfo({
+        date: locToUtcUnix(selectedDate as Date),
+        hours: parseFloat(hours),
+        miles: parseFloat(miles),
+      })
     }
 
     // Re pull the modified data
-    fetchDateInfo();
+    setDateInfoUtc(await apiFetchDateInfo(
+      locToUtcUnix(datesStart), 
+      locToUtcUnix(datesEnd)
+    ));
   }
 
   function handleMonthChange(m: Date) {
-    flushSync(() => {
-      setDatesStart(m);
-      setDatesEnd(lastDayOfMonth(add(m, {months: 1})));
-    });
-    fetchDateInfo();    
+    const ds = m;
+    const de = lastDayOfMonth(add(m, {months: 1}));
+    setDatesStart(ds);
+    setDatesEnd(de);
+    apiFetchDateInfo(locToUtcUnix(ds), locToUtcUnix(de))
+      .then(infos => setDateInfoUtc(infos))
   }
 
   return (
